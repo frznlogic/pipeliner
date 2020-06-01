@@ -55,6 +55,8 @@ abstract class BasePipeline implements Serializable {
      * Format: <cloneurl>#branchname:<context>
      */
     protected String customDockerfileSource = ''
+
+    protected String customDockerImageFromJenkinsArtifact = ''
     /**
      * Custom arguments to pass to docker
      */
@@ -373,6 +375,24 @@ abstract class BasePipeline implements Serializable {
         utils.checkout(url, branch, checkoutCredentialsId)
     }
 
+    String copyCustomDockerImageFromJenkinsArtifacts(upstreamProject,
+                                                     upstreamBuild,
+                                                     dockerImagePath) {
+        def dockerImageName
+
+        this.utils.withSshAgent( {
+        script.copyArtifacts(projectName: upstreamProject,
+                      selector: script.specific(upstreamBuild),
+                      filter: dockerImagePath)
+
+        dockerImageName = script.sh( script: 'docker load --input */build/yocto-docker.tar.gz |' +
+                                      'grep "Loaded image"| cut -d " " -f 3',
+                              returnStdout: true).trim()
+            }, this.checkoutCredentialsId)
+
+        return dockerImageName
+    }
+
     /**
      * Helper function to build a custom docker image
      *
@@ -640,10 +660,21 @@ abstract class BasePipeline implements Serializable {
             customTag = buildCustomImage("Dockerfile")
             tag = customTag
             image = customTag
+        } else if (this.customDockerImageFromJenkinsArtifact) {
+            Logger.info("Using docker image from XX build number YY")
+            customTag = copyCustomDockerImageFromJenkinsArtifacts(
+                                        stageInput["reproducible_build_job_name"],
+                                        stageInput["reproducible_build_build_number"],
+                                        stageInput["targets_reproducible_build_archive_archive"])
+            tag = customTag
+            image = customTag
         } else if (isDockerTagReference(tag)) {
             Logger.info("Pulling tag: " + tag)
             pullDockerTag(tag)
         }
+        Logger.info("tag: " + tag + 
+                    " image: " + image + 
+                    " customDockerImageFromJenkinsArtifact: " + this.customDockerImageFromJenkinsArtifact)
 
         //Check if we need to add current user to the image, if so, build a new image with it
         if (!this.dockerArgs.contains(DOCKER_ROOT_USER)) {
